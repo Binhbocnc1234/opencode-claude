@@ -547,7 +547,7 @@ async function handleChatCompletions(
       ? await buildOpenCodeMcpServer(openCodeTools, pendingTools, notifyPark)
       : undefined;
 
-  const bridgeOpenCodeTools = !isMetaRequest && openCodeTools.length > 0;
+  const bridgeOpenCodeTools = mcpServers !== undefined;
   const openCodeToolNames = openCodeTools
     .map((t) => t.function?.name)
     .filter((n): n is string => typeof n === "string" && n.length > 0);
@@ -801,105 +801,98 @@ async function buildOpenCodeMcpServer(
   tools: OpenAITool[],
   pendingTools: Map<string, ParkedToolCall>,
   onPark: () => void,
-): Promise<Record<string, unknown> | undefined> {
-  try {
-    const sdk = await import("@anthropic-ai/claude-agent-sdk");
-    const { z } = await import("zod");
-    const createSdkMcpServer = (sdk as { createSdkMcpServer?: Function })
-      .createSdkMcpServer;
-    const toolFactory = (sdk as { tool?: Function }).tool;
-    if (typeof createSdkMcpServer !== "function" || typeof toolFactory !== "function") {
-      log.warn("[opencode-claude] SDK MCP helpers unavailable; OpenCode tools disabled");
-      return undefined;
-    }
-
-    const jsonSchemaToZodShape = (
-      schema: Record<string, unknown> | undefined,
-    ): Record<string, unknown> => {
-      const props =
-        schema &&
-        typeof schema === "object" &&
-        schema.properties &&
-        typeof schema.properties === "object"
-          ? (schema.properties as Record<string, unknown>)
-          : {};
-      const required = new Set(
-        Array.isArray(schema?.required)
-          ? schema!.required.filter((x): x is string => typeof x === "string")
-          : [],
-      );
-      const shape: Record<string, unknown> = {};
-      for (const [key, prop] of Object.entries(props)) {
-        const type =
-          prop && typeof prop === "object"
-            ? (prop as { type?: unknown }).type
-            : undefined;
-        let field: unknown = z.any();
-        if (type === "string") field = z.string();
-        else if (type === "number" || type === "integer") field = z.number();
-        else if (type === "boolean") field = z.boolean();
-        else if (type === "array") field = z.array(z.any());
-        else if (type === "object") field = z.record(z.string(), z.any());
-        if (!required.has(key)) {
-          field = (field as { optional: () => unknown }).optional();
-        }
-        shape[key] = field;
-      }
-      return shape;
-    };
-
-    const mcpTools = tools
-      .map((t) => {
-        const name = t.function?.name;
-        if (!name) return null;
-        const description = t.function?.description || name;
-        const shape = jsonSchemaToZodShape(
-          t.function?.parameters as Record<string, unknown> | undefined,
-        );
-        return toolFactory(
-          name,
-          description,
-          shape,
-          async (args: Record<string, unknown>) => {
-            const id = `call_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-            const pending: ParkedToolCall = {
-              id,
-              name,
-              arguments: JSON.stringify(args ?? {}),
-              resolve: () => {},
-              reject: () => {},
-            };
-            const resultPromise = new Promise<string>((resolve, reject) => {
-              pending.resolve = resolve;
-              pending.reject = reject;
-            });
-            // Register before notifying so the stream consumer sees the tool.
-            pendingTools.set(id, pending);
-            onPark();
-            const result = await resultPromise;
-            return {
-              content: [{ type: "text", text: result }],
-            };
-          },
-          { alwaysLoad: true },
-        );
-      })
-      .filter(Boolean);
-
-    const server = createSdkMcpServer({
-      name: "opencode",
-      alwaysLoad: true,
-      tools: mcpTools,
-    });
-
-    return { opencode: server };
-  } catch (err) {
-    log.warn(
-      "[opencode-claude] failed to build OpenCode MCP server",
-      err instanceof Error ? err.message : err,
+): Promise<Record<string, unknown>> {
+  const sdk = await import("@anthropic-ai/claude-agent-sdk");
+  const { z } = await import("zod");
+  const createSdkMcpServer = (sdk as { createSdkMcpServer?: Function })
+    .createSdkMcpServer;
+  const toolFactory = (sdk as { tool?: Function }).tool;
+  if (typeof createSdkMcpServer !== "function" || typeof toolFactory !== "function") {
+    throw new Error(
+      "[opencode-claude] Claude Agent SDK has no MCP helpers; OpenCode tools cannot be bridged",
     );
-    return undefined;
   }
+
+  const jsonSchemaToZodShape = (
+    schema: Record<string, unknown> | undefined,
+  ): Record<string, unknown> => {
+    const props =
+      schema &&
+      typeof schema === "object" &&
+      schema.properties &&
+      typeof schema.properties === "object"
+        ? (schema.properties as Record<string, unknown>)
+        : {};
+    const required = new Set(
+      Array.isArray(schema?.required)
+        ? schema!.required.filter((x): x is string => typeof x === "string")
+        : [],
+    );
+    const shape: Record<string, unknown> = {};
+    for (const [key, prop] of Object.entries(props)) {
+      const type =
+        prop && typeof prop === "object"
+          ? (prop as { type?: unknown }).type
+          : undefined;
+      let field: unknown = z.any();
+      if (type === "string") field = z.string();
+      else if (type === "number" || type === "integer") field = z.number();
+      else if (type === "boolean") field = z.boolean();
+      else if (type === "array") field = z.array(z.any());
+      else if (type === "object") field = z.record(z.string(), z.any());
+      if (!required.has(key)) {
+        field = (field as { optional: () => unknown }).optional();
+      }
+      shape[key] = field;
+    }
+    return shape;
+  };
+
+  const mcpTools = tools
+    .map((t) => {
+      const name = t.function?.name;
+      if (!name) return null;
+      const description = t.function?.description || name;
+      const shape = jsonSchemaToZodShape(
+        t.function?.parameters as Record<string, unknown> | undefined,
+      );
+      return toolFactory(
+        name,
+        description,
+        shape,
+        async (args: Record<string, unknown>) => {
+          const id = `call_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+          const pending: ParkedToolCall = {
+            id,
+            name,
+            arguments: JSON.stringify(args ?? {}),
+            resolve: () => {},
+            reject: () => {},
+          };
+          const resultPromise = new Promise<string>((resolve, reject) => {
+            pending.resolve = resolve;
+            pending.reject = reject;
+          });
+          // Register before notifying so the stream consumer sees the tool.
+          pendingTools.set(id, pending);
+          onPark();
+          const result = await resultPromise;
+          return {
+            content: [{ type: "text", text: result }],
+          };
+        },
+        { alwaysLoad: true },
+      );
+    })
+    .filter(Boolean);
+
+  const server = createSdkMcpServer({
+    name: "opencode",
+    alwaysLoad: true,
+    tools: mcpTools,
+  });
+
+  return { opencode: server };
 }
 
 /**
