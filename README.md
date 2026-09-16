@@ -123,7 +123,7 @@ The plugin does not implement OAuth, inspect Claude credential files, inject tok
 ```text
 OpenCode
   └─ /v1/chat/completions
-       └─ Bun.serve proxy (ephemeral port; configured by the plugin)
+       └─ loopback proxy (Bun.serve under the CLI, node:http under OpenCode Desktop; ephemeral port)
             └─ Claude Agent SDK query()
                  └─ claude CLI (subscription OAuth)
 ```
@@ -150,7 +150,7 @@ The proxy records Agent SDK `rate_limit_event` telemetry and hard session-limit 
 - [OpenCode](https://opencode.ai)
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) — on `PATH` or installed via the provider's install action (npm is used, or the official install script); the plugin also checks `~/.local/bin` and the npm global bin for a CLI the server PATH cannot see
 - Claude plan supported by Claude Code
-- Bun (plugin runtime) · Node.js ≥ 18
+- Bun (OpenCode CLI) or Node.js ≥ 18 (OpenCode Desktop) as the plugin runtime
 
 ## Development
 

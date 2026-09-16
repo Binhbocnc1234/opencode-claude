@@ -43,6 +43,7 @@ import {
   setForeignSessionId,
 } from "./session-store.js";
 import { log } from "./log.js";
+import { listen, type HttpListener } from "./http-listener.js";
 import {
   getRateLimitSnapshot,
   maybeRateLimitNote,
@@ -90,7 +91,8 @@ function turnStallMs(): number {
 }
 
 /**
- * Bun.serve defaults to 10s and RSTs idle sockets. OpenCode maps that to a
+ * Bun.serve defaults to 10s and RSTs idle sockets (the Node listener maps
+ * this value to its socket timeout). OpenCode maps that to a
  * retryable "Connection reset by server". This proxy holds the HTTP response
  * until the Claude turn proves alive, and SSE can pause during thinking —
  * both exceed 10s easily. 0 disables the timer (same as OpenCode's adapter).
@@ -100,7 +102,7 @@ export const SSE_HEARTBEAT_MS = 5_000;
 
 /**
  * Optional pinned port via OPENCODE_CLAUDE_PROXY_PORT.
- * Default is `0` — Bun binds an ephemeral free port; the live URL is then
+ * Default is `0` — the listener binds an ephemeral free port; the live URL is then
  * published through the config hook so OpenCode always hits the
  * process that owns the listener (no static 8787 requirement).
  */
@@ -147,7 +149,7 @@ type ChatCompletionRequest = {
   temperature?: number;
 };
 
-let server: ReturnType<typeof Bun.serve> | null = null;
+let listener: HttpListener | null = null;
 let proxyPort: number | null = null;
 
 /** Injectable for smoke tests — production path always uses startClaudeQuery. */
@@ -211,7 +213,7 @@ async function isProxyHealthyAt(baseUrl: string): Promise<boolean> {
 }
 
 export async function startProxy(): Promise<number> {
-  if (server && proxyPort) return proxyPort;
+  if (listener && proxyPort) return proxyPort;
 
   // Only reuse a sibling listener when the operator pinned a port.
   if (REQUESTED_PROXY_PORT > 0) {
@@ -227,18 +229,13 @@ export async function startProxy(): Promise<number> {
   const bindPort = REQUESTED_PROXY_PORT; // 0 → ephemeral
 
   try {
-    server = Bun.serve({
+    listener = await listen(
       hostname,
-      port: bindPort,
-      idleTimeout: PROXY_IDLE_TIMEOUT_SECONDS,
-      async fetch(req) {
-        return handleRequest(req);
-      },
-    });
-    proxyPort = server.port ?? null;
-    if (!proxyPort) {
-      throw new Error("Failed to bind Claude proxy to a port");
-    }
+      bindPort,
+      PROXY_IDLE_TIMEOUT_SECONDS,
+      handleRequest,
+    );
+    proxyPort = listener.port;
     log.info(`[opencode-claude] proxy listening on ${getClaudeProxyBaseUrl()}`);
     return proxyPort;
   } catch (err) {
@@ -258,10 +255,11 @@ export async function startProxy(): Promise<number> {
 }
 
 export async function stopProxy(): Promise<void> {
-  if (server) {
-    server.stop(true);
-    server = null;
+  if (listener) {
+    const stopping = listener;
+    listener = null;
     proxyPort = null;
+    await stopping.stop();
   }
 }
 

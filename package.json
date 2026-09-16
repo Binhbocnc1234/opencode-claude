@@ -23,6 +23,7 @@
     "build": "tsc -p tsconfig.json",
     "test": "bun test/smoke.ts",
     "test:haiku": "bun test/haiku-live.ts",
+    "test:node": "npm run build && node test/node-listener.mjs",
     "prepublishOnly": "npm run build"
   },
   "repository": {
