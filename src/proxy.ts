@@ -631,23 +631,9 @@ async function handleChatCompletions(
             input: Record<string, unknown>,
           ) => ({ behavior: "allow" as const, updatedInput: input }),
         }),
-    systemPrompt: utilitySystemPrompt || {
-      type: "preset",
-      preset: "claude_code",
-      ...(bridgeOpenCodeTools
-        ? {
-            append: [
-              "You are running inside OpenCode. Built-in Claude Code tools are disabled. Use only the mcp__opencode__* tools provided for this turn; they execute via OpenCode.",
-              "Batch independent tool calls into a single turn instead of calling them one at a time.",
-              ...(hasTodoWrite
-                ? [
-                    "For any multi-step work, ALWAYS write the plan with the mcp__opencode__todowrite tool and keep it updated as you progress. A plan that only exists in your text is lost when the session is restored or handed to another agent.",
-                  ]
-                : []),
-            ].join(" "),
-          }
-        : {}),
-    },
+    systemPrompt:
+      utilitySystemPrompt ||
+      buildAgentSystemPrompt(cwd, bridgeOpenCodeTools, hasTodoWrite),
   });
 
   const bridge: ParkedBridge = {
@@ -795,6 +781,38 @@ function extractSessionId(event: unknown): string | null {
     if (typeof sid === "string") return sid;
   }
   return null;
+}
+
+/**
+ * System prompt for agent turns. It replaces Claude Code's `claude_code`
+ * preset. The tool rules are required when OpenCode tools are bridged:
+ * built-in Claude Code tools are disabled then, so without them the model
+ * reaches for tools that do not exist.
+ */
+function buildAgentSystemPrompt(
+  cwd: string,
+  bridgeOpenCodeTools: boolean,
+  hasTodoWrite: boolean,
+): string {
+  const lines = [
+    "You are a coding agent running inside OpenCode. Work in the user's project, use the available tools to inspect and change files, and keep replies concise.",
+    `Working directory: ${cwd}`,
+    `Platform: ${process.platform}`,
+  ];
+  if (bridgeOpenCodeTools) {
+    lines.push(
+      [
+        "Built-in Claude Code tools are disabled. Use only the mcp__opencode__* tools provided for this turn; they execute via OpenCode.",
+        "Batch independent tool calls into a single turn instead of calling them one at a time.",
+        ...(hasTodoWrite
+          ? [
+              "For any multi-step work, ALWAYS write the plan with the mcp__opencode__todowrite tool and keep it updated as you progress. A plan that only exists in your text is lost when the session is restored or handed to another agent.",
+            ]
+          : []),
+      ].join(" "),
+    );
+  }
+  return lines.join("\n");
 }
 
 async function buildOpenCodeMcpServer(

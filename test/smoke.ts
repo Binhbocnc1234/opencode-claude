@@ -1129,9 +1129,11 @@ async function main() {
         .toolAliases;
       assert.equal(aliases?.TodoWrite, "mcp__opencode__todowrite");
       assert.equal(aliases?.todowrite, "mcp__opencode__todowrite");
-      const sysPrompt = seenParams.systemPrompt as { append?: string };
-      assert.match(sysPrompt.append ?? "", /mcp__opencode__todowrite/);
-      assert.match(sysPrompt.append ?? "", /[Bb]atch independent tool calls/);
+      const sysPrompt = seenParams.systemPrompt;
+      assert.equal(typeof sysPrompt, "string", "agent turns use a custom prompt, not the claude_code preset");
+      assert.match(String(sysPrompt), /mcp__opencode__todowrite/);
+      assert.match(String(sysPrompt), /[Bb]atch independent tool calls/);
+      assert.match(String(sysPrompt), /Working directory: \/data\/projects\/infra/);
 
       // Proxy + mock SDK: hard limit error BEFORE any content — the proxy
       // must answer with a truthful HTTP 429 (not a fake-200 error stream),
